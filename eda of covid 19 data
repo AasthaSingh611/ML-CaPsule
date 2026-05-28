@@ -1,0 +1,128 @@
+"""
+COVID-19 Global Data Pipeline: Extraction, Cleaning, Transformation & Visualization
+Target Dataset: Archive containing 'coronavirus_dataset.csv' and summary files.
+"""
+
+import os
+import zipfile
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# -------------------------------------------------------------------------
+# STEP 1: Archive Extraction & Path Initialization
+# -------------------------------------------------------------------------
+zip_file_path = '/content/archive (4).zip'
+extract_dir = '/content/unzipped_data'
+
+print(f"Initializing extraction from: {zip_file_path}")
+os.makedirs(extract_dir, exist_ok=True)
+
+try:
+    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_dir)
+    print(f"Successfully extracted all files to: {extract_dir}\n")
+except FileNotFoundError:
+    print(f"Error: Target archive not found at {zip_file_path}. Please verify path.\n")
+
+# Display discovered files inside the extracted workspace
+if os.path.exists(extract_dir):
+    print("Discovered files inside directory:")
+    for file in os.listdir(extract_dir):
+        print(f" - {file}")
+print("-" * 60)
+
+# -------------------------------------------------------------------------
+# STEP 2: Data Loading and Profiling
+# -------------------------------------------------------------------------
+csv_path = os.path.join(extract_dir, 'coronavirus_dataset.csv')
+
+if os.path.exists(csv_path):
+    # Load primary dataset
+    df = pd.read_csv(csv_path)
+    
+    print("Dataset Profiling & Structure:")
+    print(df.info())
+    print("\nFirst 5 Records:")
+    print(df.head())
+    
+    # Check for structural properties and missing value allocations
+    print("\nMissing Values Count per Column:")
+    print(df.isnull().sum())
+    
+    print(f"\nUnique Tracking Countries Count: {df['Country.Region'].nunique()}")
+    print(f"Unique Metric Types Tracked: {df['type'].unique()}")
+    
+    # -------------------------------------------------------------------------
+    # STEP 3: Data Cleaning & Anomaly Correction
+    # -------------------------------------------------------------------------
+    # Format dates into datetime standard objects
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Identify reporting adjustments causing negative values
+    negative_cases = df[df['cases'] < 0]
+    if not negative_cases.empty:
+        print(f"\n[Anomaly Alert] Detected {len(negative_cases)} rows with negative case values.")
+        print("Programmatically adjusting negative reporting values to 0 baseline...")
+        df.loc[df['cases'] < 0, 'cases'] = 0
+        print("Anomaly adjustment complete.")
+        
+    # -------------------------------------------------------------------------
+    # STEP 4: Data Transformation & Feature Engineering (Pivoting)
+    # -------------------------------------------------------------------------
+    print("\nGrouping and aggregating time-series data...")
+    # Aggregating values to handle sub-regions uniformly per country code timeline
+    df_agg = df.groupby(['date', 'Country.Region', 'type'])['cases'].sum().reset_index()
+    
+    # Pivot rows into explicit feature columns: confirmed, death, recovered
+    print("Pivoting data structure into standard schema shape...")
+    df_pivot = df_agg.pivot_table(
+        index=['date', 'Country.Region'], 
+        columns='type', 
+        values='cases', 
+        fill_value=0
+    ).reset_index()
+    
+    # Compute active daily metrics using structural grouped differences (diff)
+    print("Calculating day-over-day localized target differentials...")
+    df_pivot['new_confirmed'] = df_pivot.groupby('Country.Region')['confirmed'].diff().fillna(0).astype(int)
+    df_pivot['new_deaths'] = df_pivot.groupby('Country.Region')['death'].diff().fillna(0).astype(int)
+    df_pivot['new_recovered'] = df_pivot.groupby('Country.Region')['recovered'].diff().fillna(0).astype(int)
+    
+    # Rectify accidental trailing differences boundary calculations under 0
+    df_pivot.loc[df_pivot['new_confirmed'] < 0, 'new_confirmed'] = 0
+    df_pivot.loc[df_pivot['new_deaths'] < 0, 'new_deaths'] = 0
+    df_pivot.loc[df_pivot['new_recovered'] < 0, 'new_recovered'] = 0
+    
+    print("\nTransformed Dataset Preview:")
+    print(df_pivot.head())
+    
+    # -------------------------------------------------------------------------
+    # STEP 5: Global Summary Aggregation & Plotting Visualization
+    # -------------------------------------------------------------------------
+    print("\nCompiling global timelines for analytical trends rendering...")
+    df_global = df_pivot.groupby('date')[['confirmed', 'death', 'recovered']].sum().reset_index()
+    
+    print("Generating line plot visualization layout...")
+    sns.set_theme(style="darkgrid")
+    plt.figure(figsize=(14, 7))
+    
+    # Plotting metric trajectories sequentially
+    sns.lineplot(data=df_global, x='date', y='confirmed', label='Global Confirmed Cases', color='blue', linewidth=2.5)
+    sns.lineplot(data=df_global, x='date', y='recovered', label='Global Recoveries', color='green', linewidth=2)
+    sns.lineplot(data=df_global, x='date', y='death', label='Global Deaths', color='red', linewidth=2)
+    
+    # Formatting visual frame boundaries and typography titles
+    plt.title('Global Cumulative COVID-19 Cases Over Time', fontsize=16, fontweight='bold', pad=15)
+    plt.xlabel('Timeline Date Axis', fontsize=12)
+    plt.ylabel('Total Aggregated Counts (Millions / Ten-Millions)', fontsize=12)
+    plt.xticks(rotation=45)
+    plt.legend(loc='upper left', fontsize=11)
+    plt.tight_layout()
+    
+    # Rendering interface canvas frame object
+    print("Displaying compiled line plot graph:")
+    plt.show()
+
+else:
+    print(f"\nExecution Aborted: Missing file component target at source location: {csv_path}")
